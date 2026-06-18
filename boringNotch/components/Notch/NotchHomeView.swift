@@ -300,21 +300,30 @@ struct MusicControlsView: View {
 
 struct FavoriteControlButton: View {
     @ObservedObject var musicManager = MusicManager.shared
+    @ObservedObject var spotify = SpotifyLikeManager.shared
+
+    private var isSpotify: Bool {
+        musicManager.bundleIdentifier == "com.spotify.client"
+    }
 
     var body: some View {
-        HoverButton(icon: iconName, iconColor: iconColor, scale: .medium) {
-            MusicManager.shared.toggleFavoriteTrack()
+        if isSpotify && spotify.isAuthorized {
+            HoverButton(icon: spotify.isLiked ? "heart.fill" : "heart",
+                        iconColor: spotify.isLiked ? .green : .primary,
+                        scale: .medium) {
+                Task { await spotify.toggleLike() }
+            }
+            .disabled(!spotify.canLike)
+            .opacity(spotify.canLike ? 1 : 0.35)
+        } else if !isSpotify {
+            HoverButton(icon: musicManager.isFavoriteTrack ? "heart.fill" : "heart",
+                        iconColor: musicManager.isFavoriteTrack ? .red : .primary,
+                        scale: .medium) {
+                MusicManager.shared.toggleFavoriteTrack()
+            }
+            .disabled(!musicManager.canFavoriteTrack)
+            .opacity(musicManager.canFavoriteTrack ? 1 : 0.35)
         }
-        .disabled(!musicManager.canFavoriteTrack)
-        .opacity(musicManager.canFavoriteTrack ? 1 : 0.35)
-    }
-
-    private var iconName: String {
-        musicManager.isFavoriteTrack ? "heart.fill" : "heart"
-    }
-
-    private var iconColor: Color {
-        musicManager.isFavoriteTrack ? .red : .primary
     }
 }
 

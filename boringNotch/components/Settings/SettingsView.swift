@@ -600,6 +600,8 @@ struct Media: View {
     @Default(.sneakPeekStyles) var sneakPeekStyles
 
     @Default(.enableLyrics) var enableLyrics
+    @ObservedObject var spotify = SpotifyLikeManager.shared
+    @AppStorage("spotifyClientID") private var spotifyClientID: String = ""
 
     var body: some View {
         Form {
@@ -689,6 +691,42 @@ struct Media: View {
                 Text("Media controls")
             }  footer: {
                 Text("Customize which controls appear in the music player. Volume expands when active.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                HStack {
+                    Text("Client ID")
+                    Spacer()
+                    SecureField("Paste your Spotify Client ID", text: $spotifyClientID)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 240)
+                        .disabled(spotify.isAuthorized)
+                }
+                if spotify.isAuthorized {
+                    HStack {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                        Text("Connected")
+                        Spacer()
+                        Button("Disconnect") {
+                            spotify.signOut()
+                        }
+                        .foregroundStyle(.red)
+                    }
+                } else {
+                    Button("Connect Spotify") {
+                        Task {
+                            try? await spotify.authorize()
+                        }
+                    }
+                    .disabled(spotifyClientID.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            } header: {
+                Text("Spotify")
+            } footer: {
+                Text("Required for the like/save button to work with Spotify. Create an app at developer.spotify.com/dashboard and add redirect URI: boring-notch://spotify-callback")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

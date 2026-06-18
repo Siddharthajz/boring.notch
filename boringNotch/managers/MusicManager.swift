@@ -208,6 +208,14 @@ class MusicManager: ObservableObject {
         if hasContentChange {
             self.triggerFlipAnimation()
 
+            // Refresh Spotify like state when the track changes
+            if state.bundleIdentifier == "com.spotify.client" {
+                Task {
+                    try? await Task.sleep(for: .milliseconds(300))
+                    await SpotifyLikeManager.shared.refreshState()
+                }
+            }
+
             if artworkChanged, let artwork = state.artwork {
                 self.updateArtwork(artwork)
             } else if state.artwork == nil {
