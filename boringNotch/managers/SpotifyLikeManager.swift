@@ -79,7 +79,13 @@ private enum Keychain {
         SecItemDelete(query as CFDictionary)
         var add = query
         add[kSecValueData as String] = data
-        SecItemAdd(add as CFDictionary, nil)
+        // This app is ad-hoc signed, so every rebuild is a new identity to the
+        // keychain: the item written by the previous build is unreadable and the
+        // delete above can fail on its ACL. Overwrite it in place when that happens,
+        // otherwise reconnecting appears to work but never persists a token.
+        if SecItemAdd(add as CFDictionary, nil) == errSecDuplicateItem {
+            SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        }
     }
 
     static func read() -> String? {
@@ -126,6 +132,8 @@ final class SpotifyLikeManager: NSObject, ObservableObject {
     @Published private(set) var isAuthorized = false
     @Published private(set) var isLiked      = false
     @Published private(set) var canLike      = false   // current item is a likeable track
+    /// Why the heart is inert, surfaced in Settings. nil when the last call succeeded.
+    @Published private(set) var lastError: String?
 
     private var accessToken: String?
     private var accessTokenExpiry = Date.distantPast
@@ -246,20 +254,51 @@ final class SpotifyLikeManager: NSObject, ObservableObject {
 
     /// Call when the Spotify track changes. Resolves the current track ID and
     /// its saved state, driving `canLike` and `isLiked`.
-    func refreshState() async {
+    /// - Parameter expectedTitle: the title MediaRemote is showing. Spotify's Web API
+    ///   lags a beat behind a track change, so a mismatch means we'd resolve — and
+    ///   like — the *previous* track; retry briefly instead of trusting it.
+    func refreshState(expectedTitle: String? = nil) async {
         guard isAuthorized else { canLike = false; return }
         do {
             let token = try await validToken()
-            guard let id = try await fetchCurrentTrackID(token: token) else {
-                canLike = false; currentTrackID = nil; return
+
+            var current: (id: String, name: String)?
+            for attempt in 0..<3 {
+                current = try await fetchCurrentTrack(token: token)
+                guard let expected = expectedTitle, !expected.isEmpty,
+                      let name = current?.name, !matches(name, expected)
+                else { break }
+                if attempt < 2 { try? await Task.sleep(for: .milliseconds(600)) }
             }
-            currentTrackID = id
-            isLiked = try await fetchSaved(id: id, token: token)
+
+            guard let current else {
+                canLike = false
+                currentTrackID = nil
+                note("Spotify reports nothing playing (or the item is an ad/podcast/local file)")
+                return
+            }
+            currentTrackID = current.id
+            isLiked = try await fetchSaved(id: current.id, token: token)
             canLike = true
+            note(nil)
         } catch {
             canLike = false
             currentTrackID = nil
+            note(describe(error))
         }
+    }
+
+    /// Loose title comparison — MediaRemote and the Web API disagree on suffixes
+    /// like "- Remastered 2011" and on case/punctuation.
+    private func matches(_ a: String, _ b: String) -> Bool {
+        func key(_ s: String) -> String {
+            s.lowercased()
+                .components(separatedBy: CharacterSet.alphanumerics.inverted)
+                .joined()
+        }
+        let (x, y) = (key(a), key(b))
+        guard !x.isEmpty, !y.isEmpty else { return true }
+        return x.hasPrefix(y) || y.hasPrefix(x)
     }
 
     func toggleLike() async {
@@ -271,10 +310,11 @@ final class SpotifyLikeManager: NSObject, ObservableObject {
             try await setSaved(target, id: id, token: token)
         } catch {
             isLiked = !target                         // revert on failure
+            note(describe(error))
         }
     }
 
-    private func fetchCurrentTrackID(token: String) async throws -> String? {
+    private func fetchCurrentTrack(token: String) async throws -> (id: String, name: String)? {
         let url = URL(string: "\(SpotifyConfig.apiBase)/me/player/currently-playing")!
         let (data, resp) = try await get(url, token: token)
         guard let http = resp as? HTTPURLResponse else { throw SpotifyError.badResponse(-1) }
@@ -282,13 +322,14 @@ final class SpotifyLikeManager: NSObject, ObservableObject {
         guard http.statusCode == 200 else { throw SpotifyError.badResponse(http.statusCode) }
 
         struct Playing: Decodable {
-            struct Item: Decodable { let id: String? }
+            struct Item: Decodable { let id: String?; let name: String? }
             let currently_playing_type: String?
             let item: Item?
         }
         let playing = try JSONDecoder().decode(Playing.self, from: data)
         guard playing.currently_playing_type == "track" else { return nil } // skip ads/podcasts
-        return playing.item?.id
+        guard let id = playing.item?.id else { return nil }
+        return (id, playing.item?.name ?? "")
     }
 
     private func fetchSaved(id: String, token: String) async throws -> Bool {
@@ -315,6 +356,25 @@ final class SpotifyLikeManager: NSObject, ObservableObject {
         var req = URLRequest(url: url)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         return try await URLSession.shared.data(for: req)
+    }
+
+    private func note(_ message: String?) {
+        lastError = message
+        if let message { NSLog("SpotifyLike: \(message)") }
+    }
+
+    private func describe(_ error: Error) -> String {
+        guard let spotify = error as? SpotifyError else { return error.localizedDescription }
+        switch spotify {
+        case .notAuthorized:      return "Not connected — the stored refresh token is missing or unreadable. Reconnect in Settings."
+        case .noClientID:         return "No Client ID set in Settings."
+        case .nothingPlaying:     return "Spotify reports nothing playing."
+        case .notATrack:          return "Current item is not a track (ad, podcast or local file)."
+        case .badResponse(401):   return "401 from Spotify — the refresh token was rejected. Reconnect in Settings."
+        case .badResponse(403):   return "403 from Spotify — check the app's scopes, and that the app owner's account has Premium."
+        case .badResponse(429):   return "429 from Spotify — rate limited, try again shortly."
+        case .badResponse(let c): return "Spotify returned HTTP \(c)."
+        }
     }
 
     private func formBody(_ params: [String: String]) -> Data {

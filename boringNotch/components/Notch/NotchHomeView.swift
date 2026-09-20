@@ -384,6 +384,16 @@ struct FavoriteControlButton: View {
             }
             .disabled(!spotify.canLike)
             .opacity(spotify.canLike ? 1 : 0.35)
+            // The track-change hook in MusicManager misses two cases: the panel opened
+            // mid-track (app launched while already playing), and the track being
+            // liked inside Spotify while the panel is up. Resolve on appear, then poll
+            // for as long as the panel stays open — the task is cancelled on close.
+            .task(id: musicManager.songTitle) {
+                while !Task.isCancelled {
+                    await spotify.refreshState(expectedTitle: musicManager.songTitle)
+                    try? await Task.sleep(for: .seconds(5))
+                }
+            }
         } else if !isSpotify {
             HoverButton(icon: musicManager.isFavoriteTrack ? "heart.fill" : "heart",
                         iconColor: musicManager.isFavoriteTrack ? .red : .primary,

@@ -723,6 +723,16 @@ struct Media: View {
                     }
                     .disabled(spotifyClientID.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
+                if let lastError = spotify.lastError {
+                    HStack(alignment: .firstTextBaseline) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.yellow)
+                        Text(lastError)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             } header: {
                 Text("Spotify")
             } footer: {

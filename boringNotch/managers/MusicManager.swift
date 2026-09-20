@@ -210,9 +210,9 @@ class MusicManager: ObservableObject {
 
             // Refresh Spotify like state when the track changes
             if state.bundleIdentifier == "com.spotify.client" {
-                Task {
+                Task { [title = state.title] in
                     try? await Task.sleep(for: .milliseconds(300))
-                    await SpotifyLikeManager.shared.refreshState()
+                    await SpotifyLikeManager.shared.refreshState(expectedTitle: title)
                 }
             }
 
