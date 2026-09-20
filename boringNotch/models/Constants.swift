@@ -59,6 +59,25 @@ enum SneakPeekStyle: String, CaseIterable, Identifiable, Defaults.Serializable {
     var id: String { self.rawValue }
 }
 
+// Strength of haptic feedback. macOS only exposes a few fixed Taptic Engine
+// patterns (no intensity control), so each case maps to a NSHapticFeedbackManager
+// pattern surfaced through SwiftUI's SensoryFeedback.
+enum HapticStrength: String, CaseIterable, Identifiable, Defaults.Serializable {
+    case subtle = "Subtle"
+    case medium = "Medium"
+    case strong = "Strong"
+
+    var id: String { self.rawValue }
+
+    var sensoryFeedback: SensoryFeedback {
+        switch self {
+        case .subtle: return .alignment
+        case .medium: return .selection
+        case .strong: return .levelChange
+        }
+    }
+}
+
 // Action to perform when Option (⌥) is held while pressing media keys
 enum OptionKeyAction: String, CaseIterable, Identifiable, Defaults.Serializable {
     case openSettings = "Open System Settings"
@@ -78,6 +97,7 @@ extension Defaults.Keys {
     // MARK: Behavior
     static let minimumHoverDuration = Key<TimeInterval>("minimumHoverDuration", default: 0.3)
     static let enableHaptics = Key<Bool>("enableHaptics", default: true)
+    static let hapticStrength = Key<HapticStrength>("hapticStrength", default: .subtle)
     static let openNotchOnHover = Key<Bool>("openNotchOnHover", default: true)
     static let extendHoverArea = Key<Bool>("extendHoverArea", default: false)
     static let notchHeightMode = Key<WindowHeightMode>(

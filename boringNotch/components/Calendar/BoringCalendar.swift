@@ -61,7 +61,7 @@ struct WheelPicker: View {
         .scrollPosition(id: $scrollPosition, anchor: .center)
         .scrollTargetBehavior(.viewAligned)  // Ensures scroll view snaps the centered view
         .safeAreaPadding(.horizontal)
-        .sensoryFeedback(.alignment, trigger: haptics)
+        .sensoryFeedback(Defaults[.hapticStrength].sensoryFeedback, trigger: haptics)
         .onChange(of: scrollPosition) { oldValue, newValue in
             if !byClick {
                 handleScrollChange(newValue: newValue, config: config)

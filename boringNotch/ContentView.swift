@@ -230,7 +230,7 @@ struct ContentView: View {
                             }
                         }
                     }
-                    .sensoryFeedback(.alignment, trigger: haptics)
+                    .sensoryFeedback(Defaults[.hapticStrength].sensoryFeedback, trigger: haptics)
                     .contextMenu {
                         Button("Settings") {
                             DispatchQueue.main.async {
