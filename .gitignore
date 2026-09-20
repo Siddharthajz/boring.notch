@@ -53,3 +53,5 @@ build/
 *.xcarchive
 *.dSYM
 
+rebuild.sh
+CLAUDE.md
