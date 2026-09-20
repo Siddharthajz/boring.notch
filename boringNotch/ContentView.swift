@@ -32,6 +32,9 @@ struct ContentView: View {
 
     @State private var haptics: Bool = false
 
+    @State private var hoveringAlbumArt: Bool = false
+    @State private var hoveringVisualizer: Bool = false
+
     @Namespace var albumArtNamespace
 
     @Default(.useMusicVisualizer) var useMusicVisualizer
@@ -77,6 +80,25 @@ struct ContentView: View {
 
     private var openPanelHeight: CGFloat {
         usesRaisedPlayer ? openNotchSize.height : openNotchSize.height + stackedHeaderExtraHeight
+    }
+
+    private var showsInlineTrackInfo: Bool {
+        coordinator.expandingView.show
+            && coordinator.expandingView.type == .music
+            && Defaults[.sneakPeekStyles] == .inline
+    }
+
+    /// Hovering the artwork shows the track name on a row under the pill, the
+    /// same presentation the standard music sneak peek uses.
+    private var showsHoveredTrackName: Bool {
+        hoveringAlbumArt
+            && vm.notchState == .closed
+            && !vm.hideOnClosed
+            && !coordinator.sneakPeek.show
+    }
+
+    private var trackInfoTint: Color {
+        Defaults[.coloredSpectrogram] ? Color(nsColor: musicManager.avgColor) : Color.gray
     }
 
     private var computedChinWidth: CGFloat {
@@ -357,20 +379,16 @@ struct ContentView: View {
                           // Old sneak peek music
                           else if coordinator.sneakPeek.type == .music {
                               if vm.notchState == .closed && !vm.hideOnClosed && Defaults[.sneakPeekStyles] == .standard {
-                                  HStack(alignment: .center) {
-                                      Image(systemName: "music.note")
-                                      GeometryReader { geo in
-                                          MarqueeText(.constant(musicManager.songTitle + " - " + musicManager.artistName),  textColor: Defaults[.playerColorTinting] ? Color(nsColor: musicManager.avgColor).ensureMinimumBrightness(factor: 0.6) : .gray, minDuration: 1, frameWidth: geo.size.width)
-                                      }
-                                  }
-                                  .foregroundStyle(.gray)
-                                  .padding(.bottom, 10)
+                                  TrackNameRow()
                               }
                           }
+                      } else if showsHoveredTrackName {
+                          TrackNameRow()
+                              .transition(.opacity)
                       }
                   }
               }
-              .conditionalModifier((coordinator.sneakPeek.show && (coordinator.sneakPeek.type == .music) && vm.notchState == .closed && !vm.hideOnClosed && Defaults[.sneakPeekStyles] == .standard) || (coordinator.sneakPeek.show && (coordinator.sneakPeek.type != .music) && (vm.notchState == .closed))) { view in
+              .conditionalModifier(showsHoveredTrackName || (coordinator.sneakPeek.show && (coordinator.sneakPeek.type == .music) && vm.notchState == .closed && !vm.hideOnClosed && Defaults[.sneakPeekStyles] == .standard) || (coordinator.sneakPeek.show && (coordinator.sneakPeek.type != .music) && (vm.notchState == .closed))) { view in
                   view
                       .fixedSize()
               }
@@ -426,6 +444,25 @@ struct ContentView: View {
     }
 
     @ViewBuilder
+    func TrackNameRow() -> some View {
+        HStack(alignment: .center) {
+            Image(systemName: "music.note")
+            GeometryReader { geo in
+                MarqueeText(
+                    .constant(musicManager.songTitle + " - " + musicManager.artistName),
+                    textColor: Defaults[.playerColorTinting]
+                        ? Color(nsColor: musicManager.avgColor).ensureMinimumBrightness(factor: 0.6)
+                        : .gray,
+                    minDuration: 1,
+                    frameWidth: geo.size.width
+                )
+            }
+        }
+        .foregroundStyle(.gray)
+        .padding(.bottom, 10)
+    }
+
+    @ViewBuilder
     func MusicLiveActivity() -> some View {
         HStack {
             Image(nsImage: musicManager.albumArt)
@@ -440,56 +477,56 @@ struct ContentView: View {
                     width: max(0, vm.effectiveClosedNotchHeight - 12),
                     height: max(0, vm.effectiveClosedNotchHeight - 12)
                 )
+                // The artwork is only ~20pt square; pad the tracking area out to the
+                // full height of the pill so it is not a pixel hunt.
+                .padding(.vertical, 6)
+                .contentShape(Rectangle())
+                .onHover { hovering in
+                    handleAlbumArtHover(hovering)
+                }
 
             Rectangle()
                 .fill(.black)
                 .overlay(
                     HStack(alignment: .top) {
-                        if coordinator.expandingView.show
-                            && coordinator.expandingView.type == .music
-                        {
+                        if showsInlineTrackInfo {
                             MarqueeText(
                                 .constant(musicManager.songTitle),
-                                textColor: Defaults[.coloredSpectrogram]
-                                    ? Color(nsColor: musicManager.avgColor) : Color.gray,
+                                textColor: trackInfoTint,
                                 minDuration: 0.4,
                                 frameWidth: 100
-                            )
-                            .opacity(
-                                (coordinator.expandingView.show
-                                    && Defaults[.sneakPeekStyles] == .inline)
-                                    ? 1 : 0
                             )
                             Spacer(minLength: vm.closedNotchSize.width)
                             // Song Artist
                             Text(musicManager.artistName)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
-                                .foregroundStyle(
-                                    Defaults[.coloredSpectrogram]
-                                        ? Color(nsColor: musicManager.avgColor)
-                                        : Color.gray
-                                )
-                                .opacity(
-                                    (coordinator.expandingView.show
-                                        && coordinator.expandingView.type == .music
-                                        && Defaults[.sneakPeekStyles] == .inline)
-                                        ? 1 : 0
-                                )
+                                .foregroundStyle(trackInfoTint)
                         }
                     }
+                    .transition(.opacity)
                 )
                 .frame(
-                    width: (coordinator.expandingView.show
-                        && coordinator.expandingView.type == .music
-                        && Defaults[.sneakPeekStyles] == .inline)
+                    width: showsInlineTrackInfo
                         ? 380
                         : vm.closedNotchSize.width
                             + -cornerRadiusInsets.closed.top
                 )
 
             HStack {
-                if useMusicVisualizer {
+                if hoveringVisualizer {
+                    // Hovering swaps the visualizer for a transport control, so the
+                    // closed notch can start/stop playback without being opened.
+                    Image(systemName: musicManager.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(
+                            Defaults[.coloredSpectrogram]
+                                ? Color(nsColor: musicManager.avgColor)
+                                    .ensureMinimumBrightness(factor: 0.8) : .white
+                        )
+                        .contentTransition(.symbolEffect)
+                        .transition(.opacity)
+                } else if useMusicVisualizer {
                     Rectangle()
                         .fill(
                             Defaults[.coloredSpectrogram]
@@ -506,6 +543,16 @@ struct ContentView: View {
                     LottieAnimationContainer()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+            }
+            .contentShape(Rectangle())
+            .onHover { hovering in
+                withAnimation(.smooth(duration: 0.15)) {
+                    hoveringVisualizer = hovering
+                }
+            }
+            .onTapGesture {
+                MusicManager.shared.togglePlay()
+                if Defaults[.enableHaptics] { haptics.toggle() }
             }
             .frame(
                 width: max(
@@ -550,6 +597,13 @@ struct ContentView: View {
 
     // MARK: - Hover Management
 
+    private func handleAlbumArtHover(_ hovering: Bool) {
+        guard vm.notchState == .closed else { return }
+        withAnimation(.smooth(duration: 0.25)) {
+            hoveringAlbumArt = hovering
+        }
+    }
+
     private func handleHover(_ hovering: Bool) {
         if coordinator.firstLaunch { return }
         hoverTask?.cancel()
@@ -570,12 +624,19 @@ struct ContentView: View {
             hoverTask = Task {
                 try? await Task.sleep(for: .seconds(Defaults[.minimumHoverDuration]))
                 guard !Task.isCancelled else { return }
-                
+
+                // Resting on the artwork is a deliberate "what's playing?" gesture:
+                // hold the panel closed until the pointer moves off it again.
+                while await MainActor.run(body: { self.hoveringAlbumArt && self.isHovering }) {
+                    try? await Task.sleep(for: .milliseconds(120))
+                    guard !Task.isCancelled else { return }
+                }
+
                 await MainActor.run {
                     guard self.vm.notchState == .closed,
                           self.isHovering,
                           !self.coordinator.sneakPeek.show else { return }
-                    
+
                     self.doOpen()
                 }
             }
@@ -587,8 +648,12 @@ struct ContentView: View {
                 await MainActor.run {
                     withAnimation(animationSpring) {
                         self.isHovering = false
+                        // The pointer is gone; these never get their own exit event
+                        // if the pill changed shape underneath it.
+                        self.hoveringAlbumArt = false
+                        self.hoveringVisualizer = false
                     }
-                    
+
                     if self.vm.notchState == .open && !self.vm.isBatteryPopoverActive && !SharingStateManager.shared.preventNotchClose {
                         self.vm.close()
                     }
