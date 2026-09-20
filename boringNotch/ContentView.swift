@@ -19,6 +19,7 @@ struct ContentView: View {
     @ObservedObject var webcamManager = WebcamManager.shared
 
     @ObservedObject var coordinator = BoringViewCoordinator.shared
+    @ObservedObject var tvm = ShelfStateViewModel.shared
     @ObservedObject var musicManager = MusicManager.shared
     @ObservedObject var batteryModel = BatteryStatusViewModel.shared
     @ObservedObject var brightnessManager = BrightnessManager.shared
@@ -58,13 +59,33 @@ struct ContentView: View {
         )
     }
 
+    private var shouldShowCamera: Bool {
+        Defaults[.showMirror] && webcamManager.cameraAvailable && vm.isCameraExpanded
+    }
+
+    /// The header's leading slot is occupied by the shelf tab switcher.
+    private var headerShowsTabs: Bool {
+        Defaults[.boringShelf] && (!tvm.isEmpty || coordinator.alwaysShowTabs)
+    }
+
+    /// Compact player: the artwork rises into the band beside the notch and the
+    /// header floats over it, instead of the header taking a row of its own.
+    /// Not usable when the tab switcher needs that same space.
+    private var usesRaisedPlayer: Bool {
+        vm.notchState == .open && coordinator.currentView == .home && !headerShowsTabs
+    }
+
+    private var openPanelHeight: CGFloat {
+        usesRaisedPlayer ? openNotchSize.height : openNotchSize.height + stackedHeaderExtraHeight
+    }
+
     private var computedChinWidth: CGFloat {
         var chinWidth: CGFloat = vm.closedNotchSize.width
 
         if coordinator.expandingView.type == .battery && coordinator.expandingView.show
             && vm.notchState == .closed && Defaults[.showPowerStatusNotifications]
         {
-            chinWidth = 640
+            chinWidth = openNotchSize.width
         } else if (!coordinator.expandingView.show || coordinator.expandingView.type == .music)
             && vm.notchState == .closed && (musicManager.isPlaying || !musicManager.isPlayerIdle)
             && coordinator.musicLiveActivityEnabled && !vm.hideOnClosed
@@ -118,7 +139,13 @@ struct ContentView: View {
                     )
                 
                 mainLayout
-                    .frame(height: vm.notchState == .open ? vm.notchSize.height : nil)
+                    .frame(
+                        width: vm.notchState == .open ? openNotchWidth(showingCamera: shouldShowCamera, screenUUID: vm.screenUUID) : nil,
+                        height: vm.notchState == .open ? openPanelHeight : nil,
+                        // Top-aligned: any leftover height belongs below the controls,
+                        // not split above the header as extra space under the notch.
+                        alignment: .top
+                    )
                     .conditionalModifier(true) { view in
                         let openAnimation = Animation.spring(response: 0.42, dampingFraction: 0.8, blendDuration: 0)
                         let closeAnimation = Animation.spring(response: 0.45, dampingFraction: 1.0, blendDuration: 0)
@@ -244,7 +271,9 @@ struct ContentView: View {
 
     @ViewBuilder
     func NotchLayout() -> some View {
-        VStack(alignment: .leading) {
+        // No default spacing when open: the header band already clears the notch,
+        // and extra spacing below it reads as dead space above the content.
+        VStack(alignment: .leading, spacing: vm.notchState == .open ? 0 : nil) {
             VStack(alignment: .leading) {
                 if coordinator.helloAnimationRunning {
                     Spacer()
@@ -293,9 +322,13 @@ struct ContentView: View {
                       } else if !coordinator.expandingView.show && vm.notchState == .closed && (!musicManager.isPlaying && musicManager.isPlayerIdle) && Defaults[.showNotHumanFace] && !vm.hideOnClosed  {
                           BoringFaceAnimation()
                        } else if vm.notchState == .open {
-                           BoringHeader()
-                               .frame(height: max(24, vm.effectiveClosedNotchHeight))
-                               .opacity(gestureProgress != 0 ? 1.0 - min(abs(gestureProgress) * 0.1, 0.3) : 1.0)
+                           // In the raised layout the header is overlaid on the band
+                           // (see the overlay below) so the artwork can use it.
+                           if !usesRaisedPlayer {
+                               BoringHeader()
+                                   .frame(height: max(24, vm.effectiveClosedNotchHeight))
+                                   .opacity(gestureProgress != 0 ? 1.0 - min(abs(gestureProgress) * 0.1, 0.3) : 1.0)
+                           }
                        } else {
                            Rectangle().fill(.clear).frame(width: vm.closedNotchSize.width - 20, height: vm.effectiveClosedNotchHeight)
                        }
@@ -346,7 +379,7 @@ struct ContentView: View {
                 VStack {
                     switch coordinator.currentView {
                     case .home:
-                        NotchHomeView(albumArtNamespace: albumArtNamespace)
+                        NotchHomeView(albumArtNamespace: albumArtNamespace, raised: usesRaisedPlayer)
                     case .shelf:
                         ShelfView()
                     }
@@ -362,6 +395,13 @@ struct ContentView: View {
             }
         }
         .onDrop(of: [.fileURL, .url, .utf8PlainText, .plainText, .data], delegate: GeneralDropTargetDelegate(isTargeted: $vm.generalDropTargeting))
+        .overlay(alignment: .top) {
+            if usesRaisedPlayer {
+                BoringHeader()
+                    .frame(height: max(24, vm.effectiveClosedNotchHeight))
+                    .opacity(gestureProgress != 0 ? 1.0 - min(abs(gestureProgress) * 0.1, 0.3) : 1.0)
+            }
+        }
     }
 
     @ViewBuilder

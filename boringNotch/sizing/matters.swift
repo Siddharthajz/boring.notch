@@ -13,8 +13,62 @@ let downloadSneakSize: CGSize = .init(width: 65, height: 1)
 let batterySneakSize: CGSize = .init(width: 160, height: 1)
 
 let shadowPadding: CGFloat = 20
-let openNotchSize: CGSize = .init(width: 640, height: 190)
-let windowSize: CGSize = .init(width: openNotchSize.width, height: openNotchSize.height + shadowPadding)
+// Expanded panel metrics, tuned to Alcove's compact player: artwork and title on
+// one row, a scrubber flanked by timestamps, then a centered control row.
+// `openNotchSize` is the music-only panel; optional columns widen it (see
+// `openNotchWidth`), up to `maxOpenNotchWidth`, which is what the window is sized to.
+//
+// The width is not arbitrary: in the compact player the artwork rises into the
+// band beside the physical notch, so each side column must fit
+// `horizontalInset + albumArtOpenSize` next to a ~189pt notch. Narrower than this
+// and the artwork disappears behind the notch cutout.
+let openNotchSize: CGSize = .init(width: 420, height: 176)
+/// Extra height for layouts that need a header row above the content (shelf, or
+/// home when the shelf tabs are showing) instead of the raised artwork.
+let stackedHeaderExtraHeight: CGFloat = 30
+let maxOpenNotchWidth: CGFloat = 640
+let windowSize: CGSize = .init(width: maxOpenNotchWidth, height: openNotchSize.height + shadowPadding)
+
+let homeColumnSpacing: CGFloat = 15
+let calendarColumnWidth: CGFloat = 175
+let compactCalendarColumnWidth: CGFloat = 145  // when the camera shares the row
+let cameraColumnWidth: CGFloat = 160
+let albumArtOpenSize: CGFloat = 80
+
+/// Horizontal padding between the panel edge and its content, as applied in
+/// `ContentView.NotchLayout` (corner-radius inset + content padding).
+let panelHorizontalInset: CGFloat = cornerRadiusInsets.opened.top + 12
+
+/// Free width between the panel's content edge and the physical notch, per side.
+/// Zero on a display without a notch, where the whole band is usable.
+@MainActor func notchSideColumnWidth(panelWidth: CGFloat, screenUUID: String? = nil) -> CGFloat {
+    let notchWidth = getClosedNotchSize(screenUUID: screenUUID).width
+    return max(0, (panelWidth - notchWidth) / 2 - panelHorizontalInset)
+}
+
+/// Base width of the compact player: wide enough that the raised artwork still
+/// clears the notch. Scaled display modes change how many points the (physically
+/// fixed) notch spans — "More Space" makes it wider in points — so this is derived
+/// from the live notch width rather than assuming the default resolution.
+@MainActor func compactPlayerWidth(screenUUID: String? = nil) -> CGFloat {
+    let notchWidth = getClosedNotchSize(screenUUID: screenUUID).width
+    let needed = notchWidth + 2 * (panelHorizontalInset + albumArtOpenSize + 4)
+    return min(max(openNotchSize.width, needed), maxOpenNotchWidth)
+}
+
+/// Width of the expanded panel for the columns currently enabled.
+@MainActor func openNotchWidth(showingCamera: Bool, screenUUID: String? = nil) -> CGFloat {
+    var width = compactPlayerWidth(screenUUID: screenUUID)
+
+    if Defaults[.showCalendar] {
+        width += (showingCamera ? compactCalendarColumnWidth : calendarColumnWidth) + homeColumnSpacing
+    }
+    if showingCamera {
+        width += cameraColumnWidth + homeColumnSpacing
+    }
+
+    return min(width, maxOpenNotchWidth)
+}
 let cornerRadiusInsets: (opened: (top: CGFloat, bottom: CGFloat), closed: (top: CGFloat, bottom: CGFloat)) = (opened: (top: 19, bottom: 24), closed: (top: 6, bottom: 14))
 
 enum MusicPlayerImageSizes {

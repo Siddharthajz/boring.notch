@@ -15,11 +15,143 @@ import SwiftUI
 struct MusicPlayerView: View {
     @EnvironmentObject var vm: BoringViewModel
     let albumArtNamespace: Namespace.ID
+    /// Artwork sits in the band beside the notch instead of below it.
+    var raised: Bool = false
 
     var body: some View {
-        HStack {
-            AlbumArtView(vm: vm, albumArtNamespace: albumArtNamespace).padding(.all, 5)
+        VStack(alignment: .leading, spacing: 6) {
+            TrackHeaderView(vm: vm, albumArtNamespace: albumArtNamespace, raised: raised)
             MusicControlsView().drawingGroup().compositingGroup()
+        }
+        .padding(.leading, 5)
+    }
+}
+
+/// Artwork, title/artist and the spectrum on a single row — the top third of the panel.
+///
+/// When `raised`, the artwork starts at the very top of the panel, in the free
+/// column beside the physical notch, and everything that would land *behind* the
+/// notch — title, artist, spectrum — is pushed below its bottom edge.
+struct TrackHeaderView: View {
+    @ObservedObject var musicManager = MusicManager.shared
+    @ObservedObject var vm: BoringViewModel
+    let albumArtNamespace: Namespace.ID
+    var raised: Bool = false
+
+    @Default(.useMusicVisualizer) private var useMusicVisualizer
+
+    /// Artwork can only be as wide as the gap between the panel edge and the notch.
+    private var artSize: CGFloat {
+        guard raised else { return albumArtOpenSize }
+        let sideColumn = notchSideColumnWidth(
+            panelWidth: compactPlayerWidth(screenUUID: vm.screenUUID),
+            screenUUID: vm.screenUUID
+        )
+        return sideColumn > 0 ? min(albumArtOpenSize, sideColumn - 4) : albumArtOpenSize
+    }
+
+    /// How far the text has to drop to clear the notch.
+    private var notchClearance: CGFloat {
+        raised ? max(0, vm.effectiveClosedNotchHeight - 4) : 0
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            AlbumArtView(vm: vm, albumArtNamespace: albumArtNamespace)
+                .frame(width: artSize, height: artSize)
+                .padding(.top, raised ? 4 : 0)
+
+            GeometryReader { geo in
+                VStack(alignment: .leading, spacing: 0) {
+                    Spacer(minLength: 0)
+                    SongInfoView(width: geo.size.width)
+                    Spacer(minLength: 0)
+                }
+            }
+            .padding(.top, notchClearance)
+
+            if useMusicVisualizer && musicManager.isPlaying {
+                Rectangle()
+                    .fill(
+                        Defaults[.coloredSpectrogram]
+                            ? Color(nsColor: musicManager.avgColor).gradient
+                            : Color.gray.gradient
+                    )
+                    .frame(width: 20, height: 16)
+                    .mask {
+                        AudioSpectrumView(isPlaying: $musicManager.isPlaying)
+                            .frame(width: 20, height: 16)
+                    }
+                    .padding(.top, notchClearance + 6)
+                    .transition(.opacity)
+            }
+        }
+        .frame(height: artSize + (raised ? 4 : 0))
+    }
+}
+
+struct SongInfoView: View {
+    @ObservedObject var musicManager = MusicManager.shared
+    let width: CGFloat
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            MarqueeText(
+                $musicManager.songTitle, font: .title3, nsFont: .title3, textColor: .white,
+                frameWidth: width)
+            .fontWeight(.semibold)
+            MarqueeText(
+                $musicManager.artistName,
+                font: .headline,
+                nsFont: .headline,
+                textColor: Defaults[.playerColorTinting]
+                    ? Color(nsColor: musicManager.avgColor)
+                        .ensureMinimumBrightness(factor: 0.6) : .gray,
+                frameWidth: width
+            )
+            .fontWeight(.medium)
+            if Defaults[.enableLyrics] {
+                LyricsLineView(width: width)
+            }
+        }
+    }
+}
+
+struct LyricsLineView: View {
+    @ObservedObject var musicManager = MusicManager.shared
+    let width: CGFloat
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 0.25)) { timeline in
+            let currentElapsed: Double = {
+                guard musicManager.isPlaying else { return musicManager.elapsedTime }
+                let delta = timeline.date.timeIntervalSince(musicManager.timestampDate)
+                let progressed = musicManager.elapsedTime + (delta * musicManager.playbackRate)
+                return min(max(progressed, 0), musicManager.songDuration)
+            }()
+            let line: String = {
+                if musicManager.isFetchingLyrics { return "Loading lyrics…" }
+                if !musicManager.syncedLyrics.isEmpty {
+                    return musicManager.lyricLine(at: currentElapsed)
+                }
+                let trimmed = musicManager.currentLyrics.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? "No lyrics found" : trimmed.replacingOccurrences(of: "\n", with: " ")
+            }()
+            let isPersian = line.unicodeScalars.contains { scalar in
+                let v = scalar.value
+                return v >= 0x0600 && v <= 0x06FF
+            }
+            MarqueeText(
+                .constant(line),
+                font: .subheadline,
+                nsFont: .subheadline,
+                textColor: musicManager.isFetchingLyrics ? .gray.opacity(0.7) : .gray,
+                frameWidth: width
+            )
+            .font(isPersian ? .custom("Vazirmatn-Regular", size: NSFont.preferredFont(forTextStyle: .subheadline).pointSize) : .subheadline)
+            .lineLimit(1)
+            .opacity(musicManager.isPlaying ? 1 : 0)
+            .transition(.opacity.combined(with: .move(edge: .top)))
         }
     }
 }
@@ -120,73 +252,11 @@ struct MusicControlsView: View {
     @Default(.musicControlSlotLimit) private var slotLimit
 
     var body: some View {
-        VStack(alignment: .leading) {
-            songInfoAndSlider
+        VStack(alignment: .leading, spacing: 2) {
+            musicSlider
             slotToolbar
         }
         .buttonStyle(PlainButtonStyle())
-    }
-
-    private var songInfoAndSlider: some View {
-        GeometryReader { geo in
-            VStack(alignment: .leading, spacing: 4) {
-                songInfo(width: geo.size.width)
-                musicSlider
-            }
-        }
-        .padding(.top, 10)
-        .padding(.leading, 5)
-    }
-
-    private func songInfo(width: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            MarqueeText(
-                $musicManager.songTitle, font: .headline, nsFont: .headline, textColor: .white,
-                frameWidth: width)
-            MarqueeText(
-                $musicManager.artistName,
-                font: .headline,
-                nsFont: .headline,
-                textColor: Defaults[.playerColorTinting]
-                    ? Color(nsColor: musicManager.avgColor)
-                        .ensureMinimumBrightness(factor: 0.6) : .gray,
-                frameWidth: width
-            )
-            .fontWeight(.medium)
-            if Defaults[.enableLyrics] {
-                TimelineView(.animation(minimumInterval: 0.25)) { timeline in
-                    let currentElapsed: Double = {
-                        guard musicManager.isPlaying else { return musicManager.elapsedTime }
-                        let delta = timeline.date.timeIntervalSince(musicManager.timestampDate)
-                        let progressed = musicManager.elapsedTime + (delta * musicManager.playbackRate)
-                        return min(max(progressed, 0), musicManager.songDuration)
-                    }()
-                    let line: String = {
-                        if musicManager.isFetchingLyrics { return "Loading lyrics…" }
-                        if !musicManager.syncedLyrics.isEmpty {
-                            return musicManager.lyricLine(at: currentElapsed)
-                        }
-                        let trimmed = musicManager.currentLyrics.trimmingCharacters(in: .whitespacesAndNewlines)
-                        return trimmed.isEmpty ? "No lyrics found" : trimmed.replacingOccurrences(of: "\n", with: " ")
-                    }()
-                    let isPersian = line.unicodeScalars.contains { scalar in
-                        let v = scalar.value
-                        return v >= 0x0600 && v <= 0x06FF
-                    }
-                    MarqueeText(
-                        .constant(line),
-                        font: .subheadline,
-                        nsFont: .subheadline,
-                        textColor: musicManager.isFetchingLyrics ? .gray.opacity(0.7) : .gray,
-                        frameWidth: width
-                    )
-                    .font(isPersian ? .custom("Vazirmatn-Regular", size: NSFont.preferredFont(forTextStyle: .subheadline).pointSize) : .subheadline)
-                    .lineLimit(1)
-                    .opacity(musicManager.isPlaying ? 1 : 0)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-                }
-            }
-        }
     }
 
     private var musicSlider: some View {
@@ -205,8 +275,7 @@ struct MusicControlsView: View {
             ) { newValue in
                 MusicManager.shared.seek(to: newValue)
             }
-            .padding(.top, 5)
-            .frame(height: 36)
+            .frame(height: 24)
         }
     }
 
@@ -433,6 +502,7 @@ struct NotchHomeView: View {
     @ObservedObject var batteryModel = BatteryStatusViewModel.shared
     @ObservedObject var coordinator = BoringViewCoordinator.shared
     let albumArtNamespace: Namespace.ID
+    var raised: Bool = false
 
     var body: some View {
         Group {
@@ -449,12 +519,12 @@ struct NotchHomeView: View {
     }
 
     private var mainContent: some View {
-        HStack(alignment: .top, spacing: (shouldShowCamera && Defaults[.showCalendar]) ? 10 : 15) {
-            MusicPlayerView(albumArtNamespace: albumArtNamespace)
+        HStack(alignment: .top, spacing: homeColumnSpacing) {
+            MusicPlayerView(albumArtNamespace: albumArtNamespace, raised: raised)
 
             if Defaults[.showCalendar] {
                 CalendarView()
-                    .frame(width: shouldShowCamera ? 170 : 215)
+                    .frame(width: shouldShowCamera ? compactCalendarColumnWidth : calendarColumnWidth)
                     .onHover { isHovering in
                         vm.isHoveringCalendar = isHovering
                     }
@@ -465,6 +535,7 @@ struct NotchHomeView: View {
             if shouldShowCamera {
                 CameraPreviewView(webcamManager: webcamManager)
                     .scaledToFit()
+                    .frame(width: cameraColumnWidth)
                     .opacity(vm.notchState == .closed ? 0 : 1)
                     .blur(radius: vm.notchState == .closed ? 20 : 0)
                     .animation(.interactiveSpring(response: 0.32, dampingFraction: 0.76, blendDuration: 0), value: shouldShowCamera)
@@ -490,7 +561,10 @@ struct MusicSliderView: View {
 
 
     var body: some View {
-        VStack {
+        HStack(spacing: 8) {
+            Text(timeString(from: sliderValue))
+                .frame(width: 38, alignment: .leading)
+
             CustomSlider(
                 value: $sliderValue,
                 range: 0...duration,
@@ -503,18 +577,16 @@ struct MusicSliderView: View {
             )
             .frame(height: 10, alignment: .center)
 
-            HStack {
-                Text(timeString(from: sliderValue))
-                Spacer()
-                Text(timeString(from: duration))
-            }
-            .fontWeight(.medium)
-            .foregroundColor(
-                Defaults[.playerColorTinting]
-                    ? Color(nsColor: color).ensureMinimumBrightness(factor: 0.6) : .gray
-            )
-            .font(.caption)
+            Text("-" + timeString(from: max(0, duration - sliderValue)))
+                .frame(width: 38, alignment: .trailing)
         }
+        .fontWeight(.medium)
+        .foregroundColor(
+            Defaults[.playerColorTinting]
+                ? Color(nsColor: color).ensureMinimumBrightness(factor: 0.6) : .gray
+        )
+        .font(.caption)
+        .monospacedDigit()
         .onChange(of: currentDate) {
            guard !dragging, timestampDate.timeIntervalSince(lastDragged) > -1 else { return }
             sliderValue = MusicManager.shared.estimatedPlaybackPosition(at: currentDate)
